@@ -407,11 +407,15 @@ impl AppServer {
                     continue;
                 };
 
-                // Get the cached file if it exists - ignoring if it doesn't exist
+                // Get the cached file if it exists - if it doesn't, this is a
+                // dependency crate file that needs a full rebuild/hotpatch.
                 let Some(cached_file) = self.file_map.get_mut(path) else {
-                    tracing::debug!("No entry for file in filemap: {:?}", path);
-                    tracing::debug!("Filemap: {:#?}", self.file_map.keys());
-                    continue;
+                    tracing::debug!(
+                        "No entry for file in filemap (dependency crate?): {:?}",
+                        path
+                    );
+                    needs_full_rebuild = true;
+                    break;
                 };
 
                 let Ok(local_path) = path.strip_prefix(self.workspace.workspace_root()) else {
@@ -1095,6 +1099,8 @@ impl AppServer {
 
         watched_paths.dedup();
 
+        log::info!("watching: {watched_paths:?}");
+
         watched_paths
     }
 
@@ -1110,31 +1116,42 @@ impl AppServer {
     /// - the Dioxus.toml file - this is so we can hotreload the project if the user changes the Dioxus config
     fn local_dependencies(&self, crate_package: NodeId) -> Vec<PathBuf> {
         let mut paths = vec![];
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+        queue.push_back(crate_package);
+        visited.insert(crate_package);
 
-        for (dependency, _edge) in self.workspace.krates.get_deps(crate_package) {
-            let krate = match dependency {
-                krates::Node::Krate { krate, .. } => krate,
-                krates::Node::Feature { krate_index, .. } => {
-                    &self.workspace.krates[krate_index.index()]
+        while let Some(pkg) = queue.pop_front() {
+            for (dependency, _edge) in self.workspace.krates.get_deps(pkg) {
+                let (id, krate) = match dependency {
+                    krates::Node::Krate { id, krate, .. } => (id, krate),
+                    krates::Node::Feature { .. } => continue,
+                };
+
+                if krate
+                    .manifest_path
+                    .components()
+                    .any(|c| c.as_str() == ".cargo")
+                {
+                    continue;
                 }
-            };
 
-            if krate
-                .manifest_path
-                .components()
-                .any(|c| c.as_str() == ".cargo")
-            {
-                continue;
-            }
-
-            paths.push(
-                krate
+                let dep_path = krate
                     .manifest_path
                     .parent()
                     .unwrap()
                     .to_path_buf()
-                    .into_std_path_buf(),
-            );
+                    .into_std_path_buf();
+
+                paths.push(dep_path);
+
+                // Traverse transitive local deps
+                if let Some(dep_id) = self.workspace.krates.nid_for_kid(id) {
+                    if visited.insert(dep_id) {
+                        queue.push_back(dep_id);
+                    }
+                }
+            }
         }
 
         paths
@@ -1403,6 +1420,7 @@ fn create_notify_watcher(
         };
 
         if is_allowed_notify_event {
+            tracing::info!("notify event: {:?} {:?}", event.kind, event.paths);
             _ = tx.unbounded_send(event);
         }
     };
