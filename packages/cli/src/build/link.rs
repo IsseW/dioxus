@@ -683,7 +683,6 @@ impl BuildRequest {
 
         let replayable_crates: HashSet<String> = modified_crates
             .iter()
-            .filter(|name| name.as_str() != tip.as_str())
             .filter(|name| has_captured_lib(name))
             .cloned()
             .collect();
