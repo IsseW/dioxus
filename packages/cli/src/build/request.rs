@@ -1261,7 +1261,7 @@ impl BuildRequest {
 
         // Always bust the tip crate.
         let mut bust = HashSet::new();
-        bust.insert(self.package().name.clone());
+        bust.insert(self.package().name.replace('-', "_"));
 
         // Walk workspace deps of the tip crate. If we're missing cached args for any of
         // them, bust their fingerprint so the wrapper re-captures during this fat build.
@@ -1284,7 +1284,7 @@ impl BuildRequest {
         {
             if let Some(fname) = entry.file_name().to_str() {
                 if let Some((name, _)) = fname.rsplit_once('-') {
-                    if bust.contains(name) {
+                    if bust.contains(&name.replace('-', "_")) {
                         _ = std::fs::remove_dir_all(entry.path());
                     }
                 }
