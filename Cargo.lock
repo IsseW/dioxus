@@ -12515,6 +12515,7 @@ dependencies = [
  "cross-tls-crate",
  "cross-tls-crate-dylib",
  "dioxus-devtools",
+ "rayon",
 ]
 
 [[package]]

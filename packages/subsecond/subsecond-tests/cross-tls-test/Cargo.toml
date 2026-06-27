@@ -8,3 +8,4 @@ publish = false
 dioxus-devtools = { workspace = true }
 cross-tls-crate = { path = "../cross-tls-crate" }
 cross-tls-crate-dylib = { path = "../cross-tls-crate-dylib" }
+rayon = "1"

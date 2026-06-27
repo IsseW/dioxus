@@ -44,6 +44,23 @@ pub struct JumpTable {
     /// The amount of ifuncs this will register. This is used by WASM to know how much space to allocate
     /// for the ifuncs in the ifunc table
     pub ifunc_count: u64,
+
+    /// Per-platform thread-local fixups applied after the patch loads. See [`TlsFixup`].
+    #[serde(default)]
+    pub tls_fixups: Vec<TlsFixup>,
+}
+
+/// A post-load fixup that makes a patched thread-local link to the host's storage.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsFixup {
+    /// macOS.
+    MachoDescriptor { old: u64, new: u64 },
+
+    /// ELF x86_64 initial-exec.
+    ElfGotTpoff { got_slot: u64, tpoff: i64 },
+
+    /// ELF x86_64 general-dynamic. `got_slot` is the `__tls_get_addr` `{module, offset}` pair.
+    ElfGotDtv { got_slot: u64, offset: u64 },
 }
 
 /// An address to address hashmap that does not hash addresses since addresses are by definition unique.

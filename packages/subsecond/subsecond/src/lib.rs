@@ -230,6 +230,8 @@
 //! apps with Dioxus Deploy (currently under construction).
 
 pub use subsecond_types::JumpTable;
+#[cfg(unix)]
+use subsecond_types::TlsFixup;
 
 use std::{
     backtrace,
@@ -542,6 +544,61 @@ pub unsafe fn apply_patch(mut table: JumpTable) -> Result<(), PatchError> {
                 )
             })
             .collect();
+
+        #[cfg(unix)]
+        for fixup in table.tls_fixups.iter() {
+            match *fixup {
+                // Copy the host descriptor's `{key, offset}` words into the patch.
+                #[cfg(target_vendor = "apple")]
+                TlsFixup::MachoDescriptor { old, new } => {
+                    let src = (old as usize + old_offset) as *const usize;
+                    let dst = (new as usize + new_offset) as *mut usize;
+                    unsafe {
+                        *dst.add(1) = *src.add(1);
+                        *dst.add(2) = *src.add(2);
+                    }
+                }
+
+                // GOT is RELRO, so mprotect before writing the slot.
+                // NOTE: We don't switch back to read-only anywhere, probably fine for hotpatching?
+                #[cfg(not(target_vendor = "apple"))]
+                TlsFixup::ElfGotTpoff { got_slot, tpoff } => {
+                    let slot = (got_slot as usize + new_offset) as *mut i64;
+                    unsafe {
+                        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+                        let start = slot as usize & !(page - 1);
+                        let len = (slot as usize + 8) - start;
+                        libc::mprotect(
+                            start as *mut libc::c_void,
+                            len,
+                            libc::PROT_READ | libc::PROT_WRITE,
+                        );
+                        *slot = tpoff;
+                    }
+                }
+
+                // Module 1 is the executable.
+                #[cfg(not(target_vendor = "apple"))]
+                TlsFixup::ElfGotDtv { got_slot, offset } => {
+                    let entry = (got_slot as usize + new_offset) as *mut u64;
+                    unsafe {
+                        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+                        let start = entry as usize & !(page - 1);
+                        let len = (entry as usize + 16) - start;
+                        libc::mprotect(
+                            start as *mut libc::c_void,
+                            len,
+                            libc::PROT_READ | libc::PROT_WRITE,
+                        );
+                        *entry = 1;
+                        *entry.add(1) = offset;
+                    }
+                }
+
+                #[allow(unreachable_patterns)]
+                _ => {}
+            }
+        }
 
         unsafe { commit_patch(table) };
     };

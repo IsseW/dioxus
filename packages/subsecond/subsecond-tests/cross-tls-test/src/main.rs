@@ -5,8 +5,17 @@ use cross_tls_crate_dylib::get_baz;
 
 fn main() {
     dioxus_devtools::connect_subsecond();
+    const MAGIC: u64 = 0x123456789;
+    cross_tls_crate::set_identity(MAGIC);
     loop {
         dioxus_devtools::subsecond::call(|| {
+            let id = cross_tls_crate::identity();
+            assert_eq!(id, MAGIC, "TLS NOT SHARED: patch read a private copy");
+
+            use rayon::prelude::*;
+            let sum: u64 = (0..1000u64).into_par_iter().sum();
+            println!("rayon sum = {sum}");
+
             use cross_tls_crate::BAR;
             use cross_tls_crate_dylib::BAZ;
 
@@ -14,7 +23,7 @@ fn main() {
                 pub static FOO: Cell<f32> = const { Cell::new(2.0) };
             }
 
-            println!("Hello  123s123123s: {}", FOO.get());
+            println!("Foo: {}", FOO.get());
             get_bar().with(|f| println!("Bar: {:?}", f.borrow()));
             thread::sleep(Duration::from_secs(1));
 

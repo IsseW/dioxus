@@ -23,3 +23,16 @@ pub fn get_bar() -> &'static LocalKey<RefCell<Option<StoredItem>>> {
 
     &BAR
 }
+
+thread_local! {
+    pub static IDENTITY: Cell<u64> = const { Cell::new(0) };
+}
+
+#[inline]
+pub fn identity() -> u64 {
+    IDENTITY.get()
+}
+
+pub fn set_identity(v: u64) {
+    IDENTITY.set(v);
+}
