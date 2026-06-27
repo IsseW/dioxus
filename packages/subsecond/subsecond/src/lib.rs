@@ -235,6 +235,7 @@ use subsecond_types::TlsFixup;
 
 use std::{
     backtrace,
+    collections::BTreeMap,
     mem::transmute,
     panic::AssertUnwindSafe,
     sync::{Arc, Mutex, atomic::AtomicPtr},
@@ -280,6 +281,10 @@ pub fn call<O>(mut f: impl FnMut() -> O) -> O {
 // multithreading, it might become an issue.
 static APP_JUMP_TABLE: AtomicPtr<JumpTable> = AtomicPtr::new(std::ptr::null_mut());
 static HOTRELOAD_HANDLERS: Mutex<Vec<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(Vec::new());
+
+// Runtime addresses each symbol has had across patches, keyed by its stable original-binary address.
+#[cfg(any(unix, windows))]
+static PATCH_HISTORY: Mutex<BTreeMap<u64, Vec<u64>>> = Mutex::new(BTreeMap::new());
 
 /// Register a function that will be called whenever a patch is applied.
 ///
@@ -533,17 +538,22 @@ pub unsafe fn apply_patch(mut table: JumpTable) -> Result<(), PatchError> {
                 .wrapping_byte_sub(table.new_base_address as usize) as usize
         };
 
-        // Modify the jump table to be relative to the base address of the loaded library
-        table.map = table
-            .map
-            .iter()
-            .map(|(k, v)| {
-                (
-                    (*k as usize + old_offset) as u64,
-                    (*v as usize + new_offset) as u64,
-                )
-            })
-            .collect();
+        // Rebase onto the loaded library, and chain prior patches forward so dyn objects frozen to an
+        // old patch reach the newest code.
+        let mut history = PATCH_HISTORY.lock().unwrap();
+        let mut new_map = subsecond_types::AddressMap::default();
+        for (k, v) in table.map.iter() {
+            let host_runtime = (*k as usize + old_offset) as u64;
+            let patch_runtime = (*v as usize + new_offset) as u64;
+            new_map.insert(host_runtime, patch_runtime);
+            let seen = history.entry(*k).or_default();
+            for &prior_runtime in seen.iter() {
+                new_map.insert(prior_runtime, patch_runtime);
+            }
+            seen.push(patch_runtime);
+        }
+        drop(history);
+        table.map = new_map;
 
         #[cfg(unix)]
         for fixup in table.tls_fixups.iter() {
